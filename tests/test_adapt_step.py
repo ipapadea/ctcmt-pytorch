@@ -173,42 +173,6 @@ def test_one_adapt_step_moves_student_and_teacher_but_not_anchor():
     assert isinstance(outputs, list) and outputs and "instances" in outputs[0]
 
 
-def test_adapt_step_drops_gt_keys_from_batched_inputs():
-    cfg_path, weights = _resolve()
-
-    from ctcmt.ctta import CTCMTAdaptStep, CTCMTHyperParams
-    from ctcmt.d2 import build_triplet, setup_cfg
-
-    cfg = setup_cfg(cfg_path, weights=weights, freeze=False)
-    cfg.SOLVER.IMS_PER_BATCH = 1
-    cfg.SOLVER.BASE_LR = 1e-4
-    cfg.SOLVER.CTCMT_SKIP_SCORE_EM_GATE = True
-    cfg.freeze()
-
-    triplet = build_triplet(cfg)
-    from detectron2.solver import build_optimizer
-    opt = build_optimizer(cfg, triplet.student.model)
-    hp = CTCMTHyperParams.from_cfg(cfg)
-    step = CTCMTAdaptStep(triplet, opt, hp)
-
-    device = torch.device(cfg.MODEL.DEVICE)
-    batch = _synthetic_batch(cfg, include_gt=True)
-    for d in batch:
-        d["image"] = d["image"].to(device)
-
-    # If adapt step accidentally used GT, PanopticFPN.forward(train mode)
-    # would consume 'instances' + 'sem_seg' and produce supervised losses.
-    # Our step never calls model.forward; it goes through .backbone /
-    # .proposal_generator / .roi_heads with pseudo-GT it constructs itself.
-    # This test simply confirms the step accepts the batch and does not throw.
-    _ = step.step(batch)
-
-    # Original dicts still contain the GT keys (defensive copy inside step
-    # means originals are untouched):
-    assert "instances" in batch[0]
-    assert "sem_seg" in batch[0]
-
-
 def _seed_rng(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -244,8 +208,9 @@ def _run_one_seeded_step(cfg, batch):
     return initial, final
 
 
-def test_adaptation_ignores_target_ground_truth():
-    """Different valid target labels must not affect either adapted model."""
+@pytest.mark.parametrize("gt_variant", ["different-labels", "no-gt"])
+def test_adaptation_ignores_target_ground_truth(gt_variant):
+    """Target GT presence and label values must not affect either adapted model."""
     cfg_path, weights = _resolve()
 
     from ctcmt.d2 import setup_cfg
@@ -262,22 +227,32 @@ def test_adaptation_ignores_target_ground_truth():
     batch_a[0]["image"] = batch_a[0]["image"].to(torch.device(cfg.MODEL.DEVICE))
     batch_a[0]["sem_seg"].fill_(11)  # Cityscapes person; gt_classes is 0.
     batch_b = deepcopy(batch_a)
-    batch_b[0]["instances"].gt_classes.fill_(1)  # Cityscapes rider.
-    batch_b[0]["sem_seg"].fill_(12)
+    if gt_variant == "no-gt":
+        del batch_b[0]["instances"]
+        del batch_b[0]["sem_seg"]
+    else:
+        batch_b[0]["instances"].gt_classes.fill_(1)  # Cityscapes rider.
+        batch_b[0]["sem_seg"].fill_(12)
+        assert not torch.equal(batch_a[0]["instances"].gt_classes,
+                               batch_b[0]["instances"].gt_classes)
+        assert not torch.equal(batch_a[0]["sem_seg"], batch_b[0]["sem_seg"])
     assert torch.equal(batch_a[0]["image"], batch_b[0]["image"])
-    assert not torch.equal(batch_a[0]["instances"].gt_classes,
-                           batch_b[0]["instances"].gt_classes)
-    assert not torch.equal(batch_a[0]["sem_seg"], batch_b[0]["sem_seg"])
 
     python_rng = random.getstate()
     numpy_rng = np.random.get_state()
     try:
-        with torch.random.fork_rng(), torch.backends.cudnn.flags(deterministic=True, benchmark=False):
+        with torch.random.fork_rng(devices=range(torch.cuda.device_count())), \
+                torch.backends.cudnn.flags(deterministic=True, benchmark=False):
             initial_a, final_a = _run_one_seeded_step(cfg, batch_a)
             initial_b, final_b = _run_one_seeded_step(cfg, batch_b)
     finally:
         random.setstate(python_rng)
         np.random.set_state(numpy_rng)
+
+    # Defensive stripping must also leave the caller's dictionaries intact.
+    for key in ("instances", "sem_seg"):
+        assert key in batch_a[0]
+        assert (key in batch_b[0]) == (gt_variant != "no-gt")
 
     # Verify identical starting states rather than relying on the seed alone.
     for name in ("student", "teacher", "anchor"):
