@@ -12,8 +12,12 @@ Skips cleanly when detectron2 or the source checkpoint is unavailable.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 import os
+import random
+from unittest.mock import patch
 
+import numpy as np
 import pytest
 import torch
 
@@ -54,19 +58,35 @@ def _synthetic_batch(cfg, include_gt: bool = False):
 
 
 def _snapshot(model):
-    return {k: v.detach().clone() for k, v in model.state_dict().items()
-            if v.dtype.is_floating_point}
+    # Keep full states (including buffers) on CPU between the two GT runs.
+    return {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
 
 
-def _fraction_changed(before, after, atol=1e-7):
-    total = 0
-    changed = 0
-    for k, v0 in before.items():
-        v1 = after[k]
-        total += 1
-        if not torch.allclose(v0, v1.detach().to(v0.device), atol=atol):
-            changed += 1
-    return changed / max(total, 1)
+def _trainable_snapshot(model):
+    return {k: p.detach().cpu().clone() for k, p in model.named_parameters()
+            if p.requires_grad}
+
+
+def _assert_finite(state, label):
+    assert state, f"{label}: empty state"
+    for name, value in state.items():
+        assert torch.isfinite(value).all(), f"{label}: non-finite values in {name}"
+
+
+def _assert_states_close(a, b, *, label, atol, rtol):
+    assert a.keys() == b.keys(), f"{label}: state keys differ"
+    _assert_finite(a, f"{label} first")
+    _assert_finite(b, f"{label} second")
+    for name, value in a.items():
+        other = b[name]
+        assert value.shape == other.shape, f"{label}: shape mismatch in {name}"
+        assert value.dtype == other.dtype, f"{label}: dtype mismatch in {name}"
+        if value.dtype.is_floating_point:
+            assert torch.allclose(value, other, atol=atol, rtol=rtol, equal_nan=False), (
+                f"{label}: {name} differs (atol={atol}, rtol={rtol})"
+            )
+        else:
+            assert torch.equal(value, other), f"{label}: buffer {name} differs"
 
 
 def _fraction_bytewise_changed(before, after):
@@ -82,6 +102,29 @@ def _fraction_bytewise_changed(before, after):
     return changed / max(total, 1)
 
 
+def _step_with_optimizer_check(step, batch):
+    """Observe the real optimizer call, excluding forward buffers and restore."""
+    model = step.triplet.student.model
+    real_optimizer_step = step.optimizer.step
+
+    def checked_optimizer_step(*args, **kwargs):
+        before = _trainable_snapshot(model)
+        _assert_finite(before, "student before optimizer.step")
+        result = real_optimizer_step(*args, **kwargs)
+        after = _trainable_snapshot(model)
+        _assert_finite(after, "student after optimizer.step")
+        assert before.keys() == after.keys(), "trainable student parameters changed"
+        assert _fraction_bytewise_changed(before, after) > 0.0, (
+            "optimizer.step did not change any trainable student parameter"
+        )
+        return result
+
+    with patch.object(step.optimizer, "step", side_effect=checked_optimizer_step) as optimizer_step:
+        outputs = step.step(batch)
+    optimizer_step.assert_called_once_with()
+    return outputs
+
+
 def test_one_adapt_step_moves_student_and_teacher_but_not_anchor():
     cfg_path, weights = _resolve()
 
@@ -89,10 +132,10 @@ def test_one_adapt_step_moves_student_and_teacher_but_not_anchor():
     from ctcmt.d2 import build_triplet, setup_cfg
 
     cfg = setup_cfg(cfg_path, weights=weights, freeze=False)
-    # Make sure gradients + optimizer both step: nonzero LR, some restore prob.
+    # Isolate optimizer updates from stochastic restoration.
     cfg.SOLVER.IMS_PER_BATCH = 1
     cfg.SOLVER.BASE_LR = 1e-3
-    cfg.SOLVER.RST_M = 0.05
+    cfg.SOLVER.RST_M = 0.0
     cfg.SOLVER.MT = 0.99  # strong EMA drift so first step is clearly visible
     cfg.SOLVER.CTCMT_SKIP_SCORE_EM_GATE = True  # force the step to actually run
     cfg.freeze()
@@ -104,7 +147,6 @@ def test_one_adapt_step_moves_student_and_teacher_but_not_anchor():
     hp = CTCMTHyperParams.from_cfg(cfg)
     step = CTCMTAdaptStep(triplet, opt, hp)
 
-    s_before = _snapshot(triplet.student.model)
     t_before = _snapshot(triplet.teacher.model)
     a_before = _snapshot(triplet.anchor.model)
 
@@ -113,26 +155,18 @@ def test_one_adapt_step_moves_student_and_teacher_but_not_anchor():
     for d in batch:
         d["image"] = d["image"].to(device)
 
-    outputs = step.step(batch)
+    outputs = _step_with_optimizer_check(step, batch)
 
-    s_after = _snapshot(triplet.student.model)
+    s_after = _trainable_snapshot(triplet.student.model)
     t_after = _snapshot(triplet.teacher.model)
     a_after = _snapshot(triplet.anchor.model)
 
-    frac_t = _fraction_changed(t_before, t_after)
-    frac_a = _fraction_changed(a_before, a_after)
-
-    assert frac_a == 0.0, f"anchor moved (fraction={frac_a}); it must be frozen"
-    assert frac_t > 0.0, "teacher did not change: EMA never fired"
-    # Student may not change on synthetic input if the teacher produces no
-    # boxes above the score floor (the gate then short-circuits after
-    # EMA+restore). In that case at least the restore path must have run —
-    # i.e. stochastic restore visibly rewrote some student weights back
-    # toward the anchor snapshot. Assert one of the two conditions holds.
-    frac_s_bytewise = _fraction_bytewise_changed(s_before, s_after)
-    assert frac_s_bytewise > 0.0, (
-        "student did not move at all: neither optimizer nor stochastic "
-        "restore mutated the weights"
+    _assert_finite(s_after, "student after adaptation")
+    _assert_finite(t_before, "teacher before adaptation")
+    _assert_finite(t_after, "teacher after adaptation")
+    _assert_states_close(a_before, a_after, label="anchor", atol=0.0, rtol=0.0)
+    assert _fraction_bytewise_changed(t_before, t_after) > 0.0, (
+        "teacher did not change: EMA never fired"
     )
 
     # The step must return the evaluator schema.
@@ -175,78 +209,83 @@ def test_adapt_step_drops_gt_keys_from_batched_inputs():
     assert "sem_seg" in batch[0]
 
 
-def _run_one_seeded_step(cfg_path, weights, include_gt: bool):
-    """Fresh state, deterministic RNG, single adapt step. Returns the
-    teacher-model state after the step so two runs can be diffed."""
-    import random
-
-    from ctcmt.ctta import CTCMTAdaptStep, CTCMTHyperParams
-    from ctcmt.d2 import build_triplet, setup_cfg
-
-    seed = 4242
+def _seed_rng(seed):
     random.seed(seed)
+    np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+
+
+def _run_one_seeded_step(cfg, batch):
+    """Build a fresh adapter/optimizer and require a real, finite update."""
+    from ctcmt.ctta import CTCMTAdaptStep, CTCMTHyperParams
+    from ctcmt.d2 import build_triplet
+    from detectron2.solver import build_optimizer
+
+    seed = 4242
+    _seed_rng(seed)
+    triplet = build_triplet(cfg)
+    opt = build_optimizer(cfg, triplet.student.model)
+    hp = CTCMTHyperParams.from_cfg(cfg)
+    step = CTCMTAdaptStep(triplet, opt, hp)
+    initial = {name: _snapshot(getattr(triplet, name).model)
+               for name in ("student", "teacher", "anchor")}
+    for name, state in initial.items():
+        _assert_finite(state, f"initial {name}")
+
+    # Model construction and proposal sampling must consume identical RNG.
+    _seed_rng(seed + 1)
+    _step_with_optimizer_check(step, batch)
+    final = {name: _snapshot(getattr(triplet, name).model)
+             for name in ("student", "teacher")}
+    for name, state in final.items():
+        _assert_finite(state, f"adapted {name}")
+    return initial, final
+
+
+def test_adaptation_ignores_target_ground_truth():
+    """Different valid target labels must not affect either adapted model."""
+    cfg_path, weights = _resolve()
+
+    from ctcmt.d2 import setup_cfg
 
     cfg = setup_cfg(cfg_path, weights=weights, freeze=False)
     cfg.SOLVER.IMS_PER_BATCH = 1
     cfg.SOLVER.BASE_LR = 1e-3
-    cfg.SOLVER.RST_M = 0.02
+    cfg.SOLVER.RST_M = 0.0
     cfg.SOLVER.MT = 0.9
     cfg.SOLVER.CTCMT_SKIP_SCORE_EM_GATE = True
     cfg.freeze()
 
-    triplet = build_triplet(cfg)
-    from detectron2.solver import build_optimizer
-    opt = build_optimizer(cfg, triplet.student.model)
-    hp = CTCMTHyperParams.from_cfg(cfg)
-    step = CTCMTAdaptStep(triplet, opt, hp)
+    batch_a = _synthetic_batch(cfg, include_gt=True)
+    batch_a[0]["image"] = batch_a[0]["image"].to(torch.device(cfg.MODEL.DEVICE))
+    batch_a[0]["sem_seg"].fill_(11)  # Cityscapes person; gt_classes is 0.
+    batch_b = deepcopy(batch_a)
+    batch_b[0]["instances"].gt_classes.fill_(1)  # Cityscapes rider.
+    batch_b[0]["sem_seg"].fill_(12)
+    assert torch.equal(batch_a[0]["image"], batch_b[0]["image"])
+    assert not torch.equal(batch_a[0]["instances"].gt_classes,
+                           batch_b[0]["instances"].gt_classes)
+    assert not torch.equal(batch_a[0]["sem_seg"], batch_b[0]["sem_seg"])
 
-    device = torch.device(cfg.MODEL.DEVICE)
-    batch = _synthetic_batch(cfg, include_gt=include_gt)
-    for d in batch:
-        d["image"] = d["image"].to(device)
+    python_rng = random.getstate()
+    numpy_rng = np.random.get_state()
+    try:
+        with torch.random.fork_rng(), torch.backends.cudnn.flags(deterministic=True, benchmark=False):
+            initial_a, final_a = _run_one_seeded_step(cfg, batch_a)
+            initial_b, final_b = _run_one_seeded_step(cfg, batch_b)
+    finally:
+        random.setstate(python_rng)
+        np.random.set_state(numpy_rng)
 
-    # Re-seed immediately before step() so the two runs consume the same
-    # RNG sequence during the (stochastic-restore-driven) step itself.
-    torch.manual_seed(seed + 1)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed + 1)
-
-    _ = step.step(batch)
-    return _snapshot(triplet.teacher.model)
-
-
-def test_adaptation_ignores_target_ground_truth():
-    """Two seeded runs — one with GT keys attached to the batch, one without.
-
-    The teacher state after adaptation must be numerically identical (up to
-    cuDNN nondeterminism, which we bound at 1e-5). Any larger delta means GT
-    was leaking into the update path — a defensive-strip bug.
-    """
-    cfg_path, weights = _resolve()
-
-    state_without = _run_one_seeded_step(cfg_path, weights, include_gt=False)
-    state_with = _run_one_seeded_step(cfg_path, weights, include_gt=True)
-
-    assert set(state_without.keys()) == set(state_with.keys())
-    max_delta = 0.0
-    worst_key = None
-    for k in state_without:
-        a = state_without[k]
-        b = state_with[k]
-        if a.shape != b.shape:
-            raise AssertionError(f"shape mismatch on {k}: {a.shape} vs {b.shape}")
-        d = (a - b).abs().max().item()
-        if d > max_delta:
-            max_delta, worst_key = d, k
-    assert max_delta < 1e-5, (
-        f"teacher state moves with GT injection: max delta {max_delta:.3e} "
-        f"at {worst_key!r} — GT is reaching the update"
-    )
+    # Verify identical starting states rather than relying on the seed alone.
+    for name in ("student", "teacher", "anchor"):
+        _assert_states_close(initial_a[name], initial_b[name],
+                             label=f"initial {name}", atol=0.0, rtol=0.0)
+    for name in ("student", "teacher"):
+        _assert_states_close(final_a[name], final_b[name],
+                             label=f"GT independence ({name})", atol=1e-6, rtol=1e-5)
 
 
 def test_adapt_step_rejects_multi_image_batch():
