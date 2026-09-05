@@ -1,16 +1,12 @@
 """Score-EMA gate.
 
-Skips an adaptation step when the current-batch mean teacher confidence
-deviates from the running EMA by more than a threshold factor. Matches
-``CTCMT_MTL._teacher_pseudo`` in the reference detectron2 adapter and the
-earlier AMROD gate it was derived from.
+Returns a branch gate based on the mean teacher confidence of scores above
+``score_floor`` relative to the previous score EMA. Large relative increases
+or decreases close the gate. This module does not run or skip an optimizer.
 
-Rationale (from AMROD): a large deviation in either direction (much higher
-OR much lower than the EMA) is treated as an unreliable step — either the
-teacher is uncharacteristically over-confident (single-batch fluke) or the
-domain has shifted enough that pseudo-labels are untrustworthy. In both
-cases the step is skipped and only the EMA state is updated so the running
-mean tracks the target stream.
+The MTL adapter uses this decision for detection and CT-CL; segmentation
+and CT-CR may still run. The confidence EMA here is separate from the EMA
+teacher parameter update performed by the adapter.
 """
 from __future__ import annotations
 
@@ -18,12 +14,13 @@ import torch
 
 
 class ScoreEMGate:
-    """Update per-step confidence EMA and decide whether to run backward.
+    """Update confidence EMA and return the gate decision to the adapter.
 
     Ratio semantics match the reference:
         keep_step = True  if 1/thresh <= mean / score_em <= thresh
         keep_step = False otherwise (large deviation)
-    The EMA is updated in *both* branches so it tracks the target stream.
+    With valid scores, the EMA updates whether the gate is open or closed.
+    Empty / all-below-floor inputs return False without an EMA update.
     """
 
     def __init__(
@@ -41,7 +38,7 @@ class ScoreEMGate:
         self.disabled = bool(disabled)
 
     def step(self, scores: torch.Tensor) -> bool:
-        """Return True iff the adapter should perform its gradient step.
+        """Return whether confidence permits the adapter's gated branches.
 
         Empty / all-below-floor scores return False without modifying the EMA
         (nothing meaningful to update). Matches ``_teacher_pseudo``: those

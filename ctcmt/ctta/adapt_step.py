@@ -1,20 +1,27 @@
 """CTCMT-MTL adapt step: one readable orchestration of every component.
 
-Flow (per input image / batch):
+Flow (one image per batch):
 
-    1. Teacher raw prediction (no grad).
-    2. Score-EMA gate; if we skip, still run EMA + restore, then return.
-    3. Dynamic per-class threshold update + box filter.
-    4. Optional CTPV filter (teacher seg vs. det agreement).
-    5. Student full forward: backbone -> sem_seg logits + det losses on
-       pseudo-GT.
-    6. Cross-task losses: CT-CL (contrastive) + CT-CR (consistency).
-    7. Backward + optimizer step.
-    8. EMA update, stochastic restore.
-    9. Return teacher predictions in evaluator format.
+    1. Strip target GT keys, set student modes, and obtain teacher raw
+       predictions without gradients.
+    2. Evaluate the score-EMA gate for detection and CT-CL. A closed gate
+       does not return early or disable segmentation / CT-CR.
+    3. Update class thresholds and filter boxes when raw detections exist,
+       independently of the gate; optionally apply CTPV.
+    4. Compute student features and enabled losses. Detection needs an open
+       gate and retained boxes. Segmentation soft-CE uses teacher probabilities,
+       optionally augmentation-averaged, even when the detection gate is closed.
+    5. CT-CL needs an open gate, retained boxes, and the shared teacher
+       probabilities. CT-CR needs retained boxes and student segmentation,
+       but not the detection gate. Task switches and loss settings also apply.
+    6. Run backward and optimizer.step only when the loss dictionary is nonempty.
+    7. Update the EMA teacher, then stochastically restore student parameters.
+       These operations are unconditional on a normally completed step.
+    8. Predict again with the updated teacher on the same image and return
+       postprocessed predictions for evaluation (adapt-then-predict).
 
-The step never touches target GT: only ``image`` / ``height`` / ``width`` in
-``batched_inputs`` are read.
+``instances`` and ``sem_seg`` are removed from copies of the input dictionaries
+before model calls. The caller's dictionaries retain their original keys.
 """
 from __future__ import annotations
 
