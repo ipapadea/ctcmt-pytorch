@@ -1,8 +1,16 @@
 """Score-EMA gate.
 
-Skips an adaptation step when the teacher confidence has stabilized around
-its EMA. Matches ``CTCMT_MTL._teacher_pseudo`` in the reference detectron2
-adapter, and the earlier AMROD gate it was derived from.
+Skips an adaptation step when the current-batch mean teacher confidence
+deviates from the running EMA by more than a threshold factor. Matches
+``CTCMT_MTL._teacher_pseudo`` in the reference detectron2 adapter and the
+earlier AMROD gate it was derived from.
+
+Rationale (from AMROD): a large deviation in either direction (much higher
+OR much lower than the EMA) is treated as an unreliable step — either the
+teacher is uncharacteristically over-confident (single-batch fluke) or the
+domain has shifted enough that pseudo-labels are untrustworthy. In both
+cases the step is skipped and only the EMA state is updated so the running
+mean tracks the target stream.
 """
 from __future__ import annotations
 
@@ -13,8 +21,8 @@ class ScoreEMGate:
     """Update per-step confidence EMA and decide whether to run backward.
 
     Ratio semantics match the reference:
-        skip if  ratio > score_thresh  OR  1/ratio > score_thresh
-        where ratio = mean_all / score_em
+        keep_step = True  if 1/thresh <= mean / score_em <= thresh
+        keep_step = False otherwise (large deviation)
     The EMA is updated in *both* branches so it tracks the target stream.
     """
 

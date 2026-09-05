@@ -40,6 +40,37 @@ from .seg_aug import aug_averaged_teacher_seg
 
 
 # --------------------------------------------------------------------------- #
+# Flag-support policy: MTL adapter reproduces the base CT-CMT-MTL method and
+# its V2 (backbone-protected restore) / V3 (CTPV) / seg aug-averaging switches.
+# Every other reference-only ablation branch (V1 per-task gate, V4 prototype
+# anchor on PFN, E2 entropy-weighted CE, E3 teacher-entropy aug trigger, E4
+# directional gate, E5 adaptive STR) is intentionally NOT ported. Silently
+# ignoring them would produce numbers that don't match either the reference
+# or the clean method, so we raise loudly.
+# --------------------------------------------------------------------------- #
+_UNSUPPORTED_TRUTHY_FLAGS = (
+    "CTCMT_PER_TASK_GATE",              # V1
+    "CTCMT_PROTO_ANCHOR",               # V4 (Seg has its own port; MTL branch not carried over)
+    "CTCMT_ENTROPY_WEIGHTED_CE",        # E2
+    "CTCMT_AUG_TRIGGER_TEACHER_ENTROPY",  # E3
+    "CTCMT_DIRECTIONAL_GATE",           # E4
+    "CTCMT_ADAPTIVE_STR",               # E5
+)
+
+
+def _reject_unsupported_flags(s) -> None:
+    enabled = [name for name in _UNSUPPORTED_TRUTHY_FLAGS if bool(getattr(s, name, False))]
+    if enabled:
+        raise NotImplementedError(
+            "CTCMTHyperParams.from_cfg: the following SOLVER flags are set to True "
+            "in the config but are not implemented in the clean MTL adapt step: "
+            f"{enabled}. Use the reference detectron2 CTCMT_MTL meta-arch for "
+            "these ablations, or extend ctcmt.ctta.adapt_step first. See README "
+            "'Supported vs. unsupported reference flags' for the full policy."
+        )
+
+
+# --------------------------------------------------------------------------- #
 # Config plucked out of the detectron2 CfgNode. Keeps the step signature clean.
 # --------------------------------------------------------------------------- #
 @dataclass
@@ -85,6 +116,7 @@ class CTCMTHyperParams:
     @classmethod
     def from_cfg(cls, cfg) -> "CTCMTHyperParams":
         s = cfg.SOLVER
+        _reject_unsupported_flags(s)
         return cls(
             ema_decay=float(s.MT),
             rst_prob=float(s.RST_M),
@@ -195,6 +227,15 @@ class CTCMTAdaptStep:
 
     # ---- one CTTA step -------------------------------------------------- #
     def step(self, batched_inputs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        # Single-image batch is a hard requirement of the reference method:
+        # pseudo-instances are unpacked at index 0, CT-CR writes to row 0 of
+        # the target tensor, and CT-CL / CTPV use per-image coordinates that
+        # are not batched. Fail loudly rather than silently mis-adapt.
+        if len(batched_inputs) != 1:
+            raise ValueError(
+                f"CTCMTAdaptStep.step requires batch size 1; got {len(batched_inputs)}. "
+                "Set SOLVER.IMS_PER_BATCH = 1 in the config."
+            )
         self.iter += 1
         hp = self.hp
         student = self.triplet.student
@@ -249,11 +290,15 @@ class CTCMTAdaptStep:
 
         # Segmentation soft-CE (runs even when det branch is gated off,
         # unless det_only). Also required to compute CT-CR.
+        # ``t_probs_full`` becomes the *shared* teacher posterior — the same
+        # aug-averaged distribution is fed to both seg soft-CE and CT-CL so
+        # the two branches see one consistent teacher signal.
         s_seg_logits = None
+        t_probs_full: Optional[torch.Tensor] = None
         if (not hp.det_only) and student.num_seg_classes > 0:
             s_seg_logits = student.sem_seg_logits(features)
         if (not hp.det_only) and s_seg_logits is not None and t_seg_raw is not None:
-            t_probs = F.interpolate(
+            t_probs_full = F.interpolate(
                 t_seg_raw.float(),
                 size=s_seg_logits.shape[-2:],
                 mode="bilinear",
@@ -273,27 +318,30 @@ class CTCMTAdaptStep:
                             hp.seg_aug_scales,
                             hp.seg_aug_flips,
                         )
-                        t_probs = F.interpolate(
+                        t_probs_full = F.interpolate(
                             aug_probs,
                             size=s_seg_logits.shape[-2:],
                             mode="bilinear",
                             align_corners=False,
                         )
 
-            loss_seg = self.soft_seg(s_seg_logits, t_probs)
+            loss_seg = self.soft_seg(s_seg_logits, t_probs_full)
             losses["seg/soft_ce"] = hp.weight_seg * loss_seg
 
-        # CT-CL requires the det gate (only meaningful when det branch runs).
+        # CT-CL requires the det gate (only meaningful when det branch runs)
+        # AND a valid teacher posterior — reuse the shared aug-averaged one.
         if (self.ct_cl is not None and not hp.det_only and not hp.seg_only
-                and keep_step_det and len(pseudo_inst) > 0 and t_seg_raw is not None):
+                and keep_step_det and len(pseudo_inst) > 0
+                and t_probs_full is not None):
             feat_key = student.roi_box_in_features[-1]
             feat = features[feat_key]
             stride = student.fpn_stride_of(feat_key)
             boxes_feat = pseudo_inst.pred_boxes.tensor / float(stride)
+            # Match head resolution: interpolate the shared posterior to feat res.
             t_probs_feat = F.interpolate(
-                t_seg_raw.float(), size=feat.shape[-2:],
+                t_probs_full, size=feat.shape[-2:],
                 mode="bilinear", align_corners=False,
-            ).softmax(dim=1)
+            )
             loss_ctcl = self.ct_cl(
                 feat=feat,
                 boxes_feat_coords=boxes_feat,

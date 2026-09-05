@@ -19,7 +19,6 @@ from typing import Any, Dict, List, Optional
 
 import torch
 import torch.nn.functional as F
-from detectron2.structures import ImageList
 
 from ..d2.model_adapter import Detectron2ModelAdapter, Triplet
 from .ema import EMAUpdater
@@ -112,6 +111,8 @@ class CTCMTSegAdaptStep:
     def _preprocess(self, batched_inputs: List[Dict[str, Any]]):
         """Match ``SemanticSegmentor.forward``'s preprocessing exactly so
         our internal image tensor matches what the model would produce."""
+        from detectron2.structures import ImageList
+
         m = self.triplet.student.model
         images = [x["image"].to(m.device).float() for x in batched_inputs]
         images = [(x - m.pixel_mean) / m.pixel_std for x in images]
@@ -133,6 +134,11 @@ class CTCMTSegAdaptStep:
         return logits, features
 
     def step(self, batched_inputs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if len(batched_inputs) != 1:
+            raise ValueError(
+                f"CTCMTSegAdaptStep.step requires batch size 1; got {len(batched_inputs)}. "
+                "Set SOLVER.IMS_PER_BATCH = 1 in the config."
+            )
         self.iter += 1
         hp = self.hp
         student = self.triplet.student
