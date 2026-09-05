@@ -1,0 +1,50 @@
+version: "3.9"
+services:
+  ctcmt:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        USER_ID: ${USER_ID:-1000}
+    image: ctcmt-pytorch:latest
+    container_name: ctcmt-dev
+    
+    # GPU support
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    
+    # Shared memory for DataLoader workers
+    shm_size: "16gb"
+    
+    # Increase resource limits
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    
+    # Volume mounts
+    volumes:
+      # Code directory
+      - .:/home/ctcmt/ctcmt-pytorch-clean
+      # Datasets (if available locally)
+      - ${DATA_ROOT:-/tmp/datasets}:/datasets
+      # Results directory
+      - ./results:/home/ctcmt/ctcmt-pytorch-clean/results
+      # Checkpoints directory
+      - ./checkpoints:/home/ctcmt/ctcmt-pytorch-clean/checkpoints
+    
+    # Environment variables
+    environment:
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+      - NVIDIA_VISIBLE_DEVICES=all
+    
+    # Keep container running
+    stdin_open: true
+    tty: true
+    
+    # Working directory
+    working_dir: /home/ctcmt/ctcmt-pytorch-clean
