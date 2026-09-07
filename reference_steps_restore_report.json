@@ -1,0 +1,399 @@
+{
+  "status": "MATCH_TESTED_SEQUENCE",
+  "atol": 0.0001,
+  "rtol": 1e-05,
+  "seed": 4242,
+  "scope": "short real-image diagnostic; losses name-normalized; no ground truth",
+  "reference": {
+    "file": "/opt/AMROD_d2/detectron2/detectron2/modeling/meta_arch/ctcmt_mtl.py",
+    "sha256": "3502bcf0fdae4cdc2027d875777939039721e0fdac7fbcc05082401b64df7517"
+  },
+  "environment": {
+    "python": "3.11.15 (main, Mar  3 2026, 09:26:23) [GCC 11.4.0]",
+    "torch": "2.1.2+cu121",
+    "detectron2": "/opt/AMROD_d2/detectron2/detectron2/__init__.py"
+  },
+  "clean_adapter": {
+    "file": "/workspace/ctcmt-pytorch-clean/ctcmt/ctta/adapt_step.py",
+    "sha256": "948d5c9b725d87e18dba0808cc5a882b43cd948782273229e502037746dde8f3"
+  },
+  "images": [
+    "/workspace/datasets/ACDC/rgb_anon/fog/test/GOPR0475/GOPR0475_frame_000247_rgb_anon.png",
+    "/workspace/datasets/ACDC/rgb_anon/fog/test/GOPR0475/GOPR0475_frame_000252_rgb_anon.png",
+    "/workspace/datasets/ACDC/rgb_anon/fog/test/GOPR0475/GOPR0475_frame_000256_rgb_anon.png"
+  ],
+  "config": "CUDNN_BENCHMARK: false\nDATALOADER:\n  ASPECT_RATIO_GROUPING: true\n  FILTER_EMPTY_ANNOTATIONS: false\n  NUM_WORKERS: 4\n  REPEAT_THRESHOLD: 0.0\n  SAMPLER_TRAIN: TrainingSampler\nDATASETS:\n  PRECOMPUTED_PROPOSAL_TOPK_TEST: 1000\n  PRECOMPUTED_PROPOSAL_TOPK_TRAIN: 2000\n  PROPOSAL_FILES_TEST: []\n  PROPOSAL_FILES_TRAIN: []\n  TEST:\n  - acdc_fog_mtl\n  - acdc_night_mtl\n  - acdc_rain_mtl\n  - acdc_snow_mtl\n  TRAIN:\n  - cityscapes_fine_mtl_train\nGLOBAL:\n  HACK: 1.0\nINPUT:\n  CROP:\n    ENABLED: false\n    SIZE:\n    - 0.9\n    - 0.9\n    TYPE: relative_range\n  FORMAT: BGR\n  MASK_FORMAT: polygon\n  MAX_SIZE_TEST: 2048\n  MAX_SIZE_TRAIN: 2048\n  MIN_SIZE_TEST: 1024\n  MIN_SIZE_TRAIN:\n  - 800\n  - 832\n  - 864\n  - 896\n  - 928\n  - 960\n  - 992\n  - 1024\n  MIN_SIZE_TRAIN_SAMPLING: choice\n  RANDOM_FLIP: horizontal\nMODEL:\n  ANCHOR_GENERATOR:\n    ANGLES:\n    - - -90\n      - 0\n      - 90\n    ASPECT_RATIOS:\n    - - 0.5\n      - 1.0\n      - 2.0\n    NAME: DefaultAnchorGenerator\n    OFFSET: 0.0\n    SIZES:\n    - - 32\n    - - 64\n    - - 128\n    - - 256\n    - - 512\n  BACKBONE:\n    FREEZE_AT: 2\n    NAME: build_resnet_fpn_backbone\n  CTCMT_STUDENT_META_ARCH: PanopticFPN\n  DEVICE: cuda\n  FPN:\n    FUSE_TYPE: sum\n    IN_FEATURES:\n    - res2\n    - res3\n    - res4\n    - res5\n    NORM: ''\n    OUT_CHANNELS: 256\n  KEYPOINT_ON: false\n  LOAD_PROPOSALS: false\n  MASK_ON: true\n  META_ARCHITECTURE: CTCMT_MTL\n  PANOPTIC_FPN:\n    COMBINE:\n      ENABLED: true\n      INSTANCES_CONFIDENCE_THRESH: 0.5\n      OVERLAP_THRESH: 0.5\n      STUFF_AREA_LIMIT: 4096\n    INSTANCE_LOSS_WEIGHT: 1.0\n  PIXEL_MEAN:\n  - 103.53\n  - 116.28\n  - 123.675\n  PIXEL_STD:\n  - 1.0\n  - 1.0\n  - 1.0\n  PROPOSAL_GENERATOR:\n    MIN_SIZE: 0\n    NAME: RPN\n  RESNETS:\n    DEFORM_MODULATED: false\n    DEFORM_NUM_GROUPS: 1\n    DEFORM_ON_PER_STAGE:\n    - false\n    - false\n    - false\n    - false\n    DEPTH: 50\n    NORM: FrozenBN\n    NUM_GROUPS: 1\n    OUT_FEATURES:\n    - res2\n    - res3\n    - res4\n    - res5\n    RES2_OUT_CHANNELS: 256\n    RES5_DILATION: 1\n    STEM_OUT_CHANNELS: 64\n    STRIDE_IN_1X1: true\n    WIDTH_PER_GROUP: 64\n  RETINANET:\n    BBOX_REG_LOSS_TYPE: smooth_l1\n    BBOX_REG_WEIGHTS: &id002\n    - 1.0\n    - 1.0\n    - 1.0\n    - 1.0\n    FOCAL_LOSS_ALPHA: 0.25\n    FOCAL_LOSS_GAMMA: 2.0\n    IN_FEATURES:\n    - p3\n    - p4\n    - p5\n    - p6\n    - p7\n    IOU_LABELS:\n    - 0\n    - -1\n    - 1\n    IOU_THRESHOLDS:\n    - 0.4\n    - 0.5\n    NMS_THRESH_TEST: 0.5\n    NORM: ''\n    NUM_CLASSES: 80\n    NUM_CONVS: 4\n    PRIOR_PROB: 0.01\n    SCORE_THRESH_TEST: 0.05\n    SMOOTH_L1_LOSS_BETA: 0.1\n    TOPK_CANDIDATES_TEST: 1000\n  ROI_BOX_CASCADE_HEAD:\n    BBOX_REG_WEIGHTS:\n    - &id001\n      - 10.0\n      - 10.0\n      - 5.0\n      - 5.0\n    - - 20.0\n      - 20.0\n      - 10.0\n      - 10.0\n    - - 30.0\n      - 30.0\n      - 15.0\n      - 15.0\n    IOUS:\n    - 0.5\n    - 0.6\n    - 0.7\n  ROI_BOX_HEAD:\n    BBOX_REG_LOSS_TYPE: smooth_l1\n    BBOX_REG_LOSS_WEIGHT: 1.0\n    BBOX_REG_WEIGHTS: *id001\n    CLS_AGNOSTIC_BBOX_REG: false\n    CONV_DIM: 256\n    FC_DIM: 1024\n    FED_LOSS_FREQ_WEIGHT_POWER: 0.5\n    FED_LOSS_NUM_CLASSES: 50\n    NAME: FastRCNNConvFCHead\n    NORM: ''\n    NUM_CONV: 0\n    NUM_FC: 2\n    POOLER_RESOLUTION: 7\n    POOLER_SAMPLING_RATIO: 0\n    POOLER_TYPE: ROIAlignV2\n    SMOOTH_L1_BETA: 0.0\n    TRAIN_ON_PRED_BOXES: false\n    USE_FED_LOSS: false\n    USE_SIGMOID_CE: false\n  ROI_HEADS:\n    BATCH_SIZE_PER_IMAGE: 512\n    IN_FEATURES:\n    - p2\n    - p3\n    - p4\n    - p5\n    IOU_LABELS:\n    - 0\n    - 1\n    IOU_THRESHOLDS:\n    - 0.5\n    NAME: StandardROIHeads\n    NMS_THRESH_TEST: 0.5\n    NUM_CLASSES: 8\n    POSITIVE_FRACTION: 0.25\n    PROPOSAL_APPEND_GT: true\n    SCORE_THRESH_TEST: 0.05\n  ROI_KEYPOINT_HEAD:\n    CONV_DIMS:\n    - 512\n    - 512\n    - 512\n    - 512\n    - 512\n    - 512\n    - 512\n    - 512\n    LOSS_WEIGHT: 1.0\n    MIN_KEYPOINTS_PER_IMAGE: 1\n    NAME: KRCNNConvDeconvUpsampleHead\n    NORMALIZE_LOSS_BY_VISIBLE_KEYPOINTS: true\n    NUM_KEYPOINTS: 17\n    POOLER_RESOLUTION: 14\n    POOLER_SAMPLING_RATIO: 0\n    POOLER_TYPE: ROIAlignV2\n  ROI_MASK_HEAD:\n    CLS_AGNOSTIC_MASK: false\n    CONV_DIM: 256\n    NAME: MaskRCNNConvUpsampleHead\n    NORM: ''\n    NUM_CONV: 4\n    POOLER_RESOLUTION: 14\n    POOLER_SAMPLING_RATIO: 0\n    POOLER_TYPE: ROIAlignV2\n  RPN:\n    BATCH_SIZE_PER_IMAGE: 256\n    BBOX_REG_LOSS_TYPE: smooth_l1\n    BBOX_REG_LOSS_WEIGHT: 1.0\n    BBOX_REG_WEIGHTS: *id002\n    BOUNDARY_THRESH: -1\n    CONV_DIMS:\n    - -1\n    HEAD_NAME: StandardRPNHead\n    IN_FEATURES:\n    - p2\n    - p3\n    - p4\n    - p5\n    - p6\n    IOU_LABELS:\n    - 0\n    - -1\n    - 1\n    IOU_THRESHOLDS:\n    - 0.3\n    - 0.7\n    LOSS_WEIGHT: 1.0\n    NMS_THRESH: 0.7\n    POSITIVE_FRACTION: 0.5\n    POST_NMS_TOPK_TEST: 1000\n    POST_NMS_TOPK_TRAIN: 1000\n    PRE_NMS_TOPK_TEST: 1000\n    PRE_NMS_TOPK_TRAIN: 2000\n    SMOOTH_L1_BETA: 0.0\n  SEM_SEG_HEAD:\n    COMMON_STRIDE: 4\n    CONVS_DIM: 128\n    IGNORE_VALUE: 255\n    IN_FEATURES:\n    - p2\n    - p3\n    - p4\n    - p5\n    LOSS_WEIGHT: 0.5\n    NAME: SemSegFPNHead\n    NORM: GN\n    NUM_CLASSES: 19\n  WEIGHTS: /workspace/panoptic_fpn/output/panoptic_fpn_R50_cityscapes/model_final.pth\nOUTPUT_DIR: /workspace/output/ctcmt_mtl_panoptic_fpn_R50_C2ACDC\nSEED: -1\nSOLVER:\n  ALPHA_DT: 1.3\n  AMP:\n    ENABLED: false\n  BASE_LR: 0.001\n  BASE_LR_END: 0.0\n  BIAS_LR_FACTOR: 1.0\n  CHECKPOINT_PERIOD: 4000\n  CLIP_GRADIENTS:\n    CLIP_TYPE: value\n    CLIP_VALUE: 1.0\n    ENABLED: false\n    NORM_TYPE: 2.0\n  COTTA_AUG_FLIPS:\n  - false\n  - true\n  COTTA_AUG_SCALES:\n  - 0.5\n  - 0.75\n  - 1.0\n  - 1.25\n  - 1.5\n  - 1.75\n  - 2.0\n  COTTA_CONF_THRESH: 0.72\n  COTTA_EMA_DECAY: 0.999\n  COTTA_RESTORE_PROB: 0.01\n  CTAOD: false\n  CTCMT_ADAPTIVE_STR: false\n  CTCMT_ADAPTIVE_STR_BASE: 0.1\n  CTCMT_ADAPTIVE_STR_BOOST: 0.4\n  CTCMT_ADAPTIVE_STR_PIVOT: 0.05\n  CTCMT_AUG_TEACHER_ENTROPY_THRESH: 0.3\n  CTCMT_AUG_TRIGGER_TEACHER_ENTROPY: false\n  CTCMT_BACKBONE_RST_FACTOR: 1.0\n  CTCMT_CROSS_TASK_FISHER: false\n  CTCMT_CTCL_ENABLED: true\n  CTCMT_CTCL_PROJ_DIM: 128\n  CTCMT_CTCL_ROI_OUTPUT:\n  - 7\n  - 7\n  CTCMT_CTCL_SEG_VIEW: true\n  CTCMT_CTCL_TEMPERATURE: 0.07\n  CTCMT_CTPV_ENABLED: false\n  CTCMT_CTPV_THRESH: 0.3\n  CTCMT_DET_ONLY: false\n  CTCMT_DIRECTIONAL_GATE: false\n  CTCMT_DIR_GATE_BOOST: 2.0\n  CTCMT_DIR_GATE_STABLE_BAND: 0.4\n  CTCMT_ENTROPY_WEIGHTED_CE: false\n  CTCMT_PER_TASK_GATE: false\n  CTCMT_PER_TASK_GATE_DET_THRESH: 0.8\n  CTCMT_PER_TASK_GATE_SEG_THRESH: 0.8\n  CTCMT_PROTO_ANCHOR: false\n  CTCMT_PROTO_EMA: 0.999\n  CTCMT_PROTO_WEIGHT: 0.01\n  CTCMT_SEG_AUG_CONF_THRESH: 0.95\n  CTCMT_SEG_AUG_ENABLED: true\n  CTCMT_SEG_AUG_FLIPS:\n  - false\n  - true\n  CTCMT_SEG_AUG_SCALES:\n  - 0.75\n  - 1.0\n  - 1.25\n  CTCMT_SEG_ONLY: false\n  CTCMT_SEG_PROTO_CONF_THRESH: 0.9\n  CTCMT_SEG_SOURCE_PROTO: false\n  CTCMT_SKIP_SCORE_EM_GATE: false\n  CTCMT_WEIGHT_CTCL: 0.5\n  CTCMT_WEIGHT_CTCR: 0.3\n  CTCMT_WEIGHT_DET: 1.0\n  CTCMT_WEIGHT_SEG: 1.0\n  GAMMA: 0.1\n  GAMMA_DT: 0.95\n  IMS_PER_BATCH: 1\n  LOSS_WEIGHT: 1.0\n  LR_SCHEDULER_NAME: WarmupMultiStepLR\n  MAX_ITER: 70000\n  MOMENTUM: 0.9\n  MT: 0.9998\n  NESTEROV: false\n  NUM_DECAYS: 3\n  PROPOSALS: 1000\n  REFERENCE_WORLD_SIZE: 0\n  RESCALE_INTERVAL: false\n  RST_M: 0.01\n  SCORE_EM: 0.5\n  SCORE_GAMMA: 0.7\n  SCORE_THRESH: 1.4\n  STEPS:\n  - 50000\n  THRESHOLD_INIT: 0.8\n  THRESHOLD_MAX: 0.9\n  THRESHOLD_MINI: 0.7\n  TTBBR_DROP_INCONSISTENT: false\n  TTBBR_ENABLED: false\n  TTBBR_IOU_THRESH: 0.7\n  WARMUP_FACTOR: 0.001\n  WARMUP_ITERS: 0\n  WARMUP_METHOD: linear\n  WEIGHT_DECAY: 0.0001\n  WEIGHT_DECAY_BIAS: null\n  WEIGHT_DECAY_NORM: 0.0\n  XAI_FILTER_ENABLED: false\n  XAI_METHOD: eigencam\n  XAI_MODE: drop\n  XAI_THRESHOLD: 0.02\nTEST:\n  AUG:\n    ENABLED: false\n    FLIP: true\n    MAX_SIZE: 4000\n    MIN_SIZES:\n    - 400\n    - 500\n    - 600\n    - 700\n    - 800\n    - 900\n    - 1000\n    - 1100\n    - 1200\n  DETECTIONS_PER_IMAGE: 100\n  EVAL_PERIOD: 4000\n  EXPECTED_RESULTS: []\n  KEYPOINT_OKS_SIGMAS: []\n  PRECISE_BN:\n    ENABLED: false\n    NUM_ITER: 200\nVERSION: 2\nVIS_PERIOD: 0\n",
+  "restoration": {
+    "configured": 0.01,
+    "diagnostic": 0.01
+  },
+  "weights": {
+    "path": "/workspace/panoptic_fpn/output/panoptic_fpn_R50_cityscapes/model_final.pth",
+    "size_bytes": 364344520
+  },
+  "steps": [
+    {
+      "step": 1,
+      "image": "/workspace/datasets/ACDC/rgb_anon/fog/test/GOPR0475/GOPR0475_frame_000247_rgb_anon.png",
+      "comparisons": {
+        "gate": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "pseudo": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "losses": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "teacher_probs": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "thresholds": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "score_ema": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "optimizer_calls": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "modes": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "states": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "net_student_updates": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "optimizer_info": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        }
+      },
+      "reference_losses": {
+        "det/loss_rpn_cls": 0.00026462168898433447,
+        "det/loss_rpn_loc": 0.022652780637145042,
+        "det/loss_cls": 0.10304383188486099,
+        "det/loss_box_reg": 0.13244666159152985,
+        "seg/soft_ce": 0.11936005204916,
+        "ctcl": 2.529191255569458,
+        "ctcr": 0.42304402589797974
+      },
+      "clean_losses": {
+        "det/loss_rpn_cls": 0.00026462168898433447,
+        "det/loss_rpn_loc": 0.022652780637145042,
+        "det/loss_cls": 0.10304383188486099,
+        "det/loss_box_reg": 0.13244666159152985,
+        "seg/soft_ce": 0.11936005204916,
+        "ctcl": 2.529191255569458,
+        "ctcr": 0.42304402589797974
+      },
+      "reference_gate": true,
+      "clean_gate": true,
+      "reference_boxes": 5,
+      "clean_boxes": 5
+    },
+    {
+      "step": 2,
+      "image": "/workspace/datasets/ACDC/rgb_anon/fog/test/GOPR0475/GOPR0475_frame_000252_rgb_anon.png",
+      "comparisons": {
+        "gate": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "pseudo": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "losses": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "teacher_probs": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "thresholds": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "score_ema": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "optimizer_calls": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "modes": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "states": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "net_student_updates": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "optimizer_info": {
+          "passed": false,
+          "mismatch_count": 5,
+          "examples": [
+            {
+              "path": "/state/21/momentum_buffer",
+              "detail": "max_abs_diff=0.000222125556"
+            },
+            {
+              "path": "/state/37/momentum_buffer",
+              "detail": "max_abs_diff=0.000283764675"
+            },
+            {
+              "path": "/state/38/momentum_buffer",
+              "detail": "max_abs_diff=0.000167354941"
+            },
+            {
+              "path": "/state/46/momentum_buffer",
+              "detail": "max_abs_diff=0.00044426095"
+            },
+            {
+              "path": "/state/53/momentum_buffer",
+              "detail": "max_abs_diff=0.000160989352"
+            }
+          ]
+        }
+      },
+      "reference_losses": {
+        "seg/soft_ce": 0.8047018051147461,
+        "ctcr": 0.29467928409576416
+      },
+      "clean_losses": {
+        "seg/soft_ce": 0.8047019839286804,
+        "ctcr": 0.2946794331073761
+      },
+      "reference_gate": false,
+      "clean_gate": false,
+      "reference_boxes": 2,
+      "clean_boxes": 2
+    },
+    {
+      "step": 3,
+      "image": "/workspace/datasets/ACDC/rgb_anon/fog/test/GOPR0475/GOPR0475_frame_000256_rgb_anon.png",
+      "comparisons": {
+        "gate": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "pseudo": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "losses": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "teacher_probs": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "thresholds": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "score_ema": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "optimizer_calls": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "modes": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "states": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "net_student_updates": {
+          "passed": true,
+          "mismatch_count": 0,
+          "examples": []
+        },
+        "optimizer_info": {
+          "passed": false,
+          "mismatch_count": 39,
+          "examples": [
+            {
+              "path": "/state/16/momentum_buffer",
+              "detail": "max_abs_diff=0.000155047514"
+            },
+            {
+              "path": "/state/17/momentum_buffer",
+              "detail": "max_abs_diff=0.000152323395"
+            },
+            {
+              "path": "/state/19/momentum_buffer",
+              "detail": "max_abs_diff=0.000197969377"
+            },
+            {
+              "path": "/state/20/momentum_buffer",
+              "detail": "max_abs_diff=0.000326970592"
+            },
+            {
+              "path": "/state/21/momentum_buffer",
+              "detail": "max_abs_diff=0.000198037364"
+            },
+            {
+              "path": "/state/22/momentum_buffer",
+              "detail": "max_abs_diff=0.000293664634"
+            },
+            {
+              "path": "/state/23/momentum_buffer",
+              "detail": "max_abs_diff=0.000137992203"
+            },
+            {
+              "path": "/state/24/momentum_buffer",
+              "detail": "max_abs_diff=0.000137522817"
+            },
+            {
+              "path": "/state/25/momentum_buffer",
+              "detail": "max_abs_diff=0.000581994653"
+            },
+            {
+              "path": "/state/26/momentum_buffer",
+              "detail": "max_abs_diff=0.000338494778"
+            },
+            {
+              "path": "/state/27/momentum_buffer",
+              "detail": "max_abs_diff=0.000216302462"
+            },
+            {
+              "path": "/state/28/momentum_buffer",
+              "detail": "max_abs_diff=0.000918000937"
+            },
+            {
+              "path": "/state/29/momentum_buffer",
+              "detail": "max_abs_diff=0.000299796462"
+            },
+            {
+              "path": "/state/30/momentum_buffer",
+              "detail": "max_abs_diff=0.00126758171"
+            },
+            {
+              "path": "/state/31/momentum_buffer",
+              "detail": "max_abs_diff=0.000194631517"
+            },
+            {
+              "path": "/state/32/momentum_buffer",
+              "detail": "max_abs_diff=0.00037740916"
+            },
+            {
+              "path": "/state/33/momentum_buffer",
+              "detail": "max_abs_diff=0.00021420233"
+            },
+            {
+              "path": "/state/34/momentum_buffer",
+              "detail": "max_abs_diff=0.000172235072"
+            },
+            {
+              "path": "/state/35/momentum_buffer",
+              "detail": "max_abs_diff=0.000299390405"
+            },
+            {
+              "path": "/state/36/momentum_buffer",
+              "detail": "max_abs_diff=0.000486820936"
+            }
+          ]
+        }
+      },
+      "reference_losses": {
+        "seg/soft_ce": 1.7020684480667114
+      },
+      "clean_losses": {
+        "seg/soft_ce": 1.7020561695098877
+      },
+      "reference_gate": false,
+      "clean_gate": false,
+      "reference_boxes": 0,
+      "clean_boxes": 0
+    }
+  ],
+  "initial": {
+    "passed": true,
+    "mismatch_count": 0,
+    "examples": []
+  },
+  "coverage": {
+    "reference": {
+      "optimizer_calls": 3,
+      "changed_steps": 3,
+      "losses": [
+        "ctcl",
+        "ctcr",
+        "det/loss_box_reg",
+        "det/loss_cls",
+        "det/loss_rpn_cls",
+        "det/loss_rpn_loc",
+        "seg/soft_ce"
+      ]
+    },
+    "clean": {
+      "optimizer_calls": 3,
+      "changed_steps": 3,
+      "losses": [
+        "ctcl",
+        "ctcr",
+        "det/loss_box_reg",
+        "det/loss_cls",
+        "det/loss_rpn_cls",
+        "det/loss_rpn_loc",
+        "seg/soft_ce"
+      ]
+    }
+  },
+  "coverage_gaps": []
+}

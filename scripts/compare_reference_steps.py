@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Diagnose reference vs clean MTL on a short, ordered real-image sequence.
 
+Use --comparison clean-clean --rng-mode continuous to diagnose repeatability.
+Both passes run sequentially in one process using sorted files, not the production
+dataloader. This does not test cross-process ordering or worker RNG.
+
 Runs each implementation independently, with matching construction/per-image
 seeds, and compares initial states, gates, thresholds, pseudo-labels, weighted
 losses, teacher posteriors, model states, and net trainable parameter updates.
@@ -19,6 +23,8 @@ import hashlib
 import inspect
 import json
 import math
+import pickle
+import os
 from pathlib import Path
 import random
 import sys
@@ -38,6 +44,11 @@ def finite_nonnegative(value):
 
 def cli():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--comparison", choices=("reference-clean", "clean-clean"),
+                        default="reference-clean")
+    parser.add_argument("--rng-mode", choices=("per-image", "continuous"),
+                        default="per-image",
+                        help="continuous seeds once before construction, without per-image reseeding")
     parser.add_argument("--config", required=True)
     parser.add_argument("--weights", required=True)
     parser.add_argument("--image-root", type=Path, required=True)
@@ -60,6 +71,19 @@ def seed_all(seed):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def rng_fingerprint():
+    def digest(value):
+        return hashlib.sha256(value).hexdigest()
+    return {
+        "python": digest(pickle.dumps(random.getstate())),
+        "numpy": digest(pickle.dumps(np.random.get_state())),
+        "torch_cpu": digest(torch.get_rng_state().cpu().numpy().tobytes()),
+        "torch_cuda": [digest(v.cpu().numpy().tobytes())
+                       for v in torch.cuda.get_rng_state_all()]
+                       if torch.cuda.is_available() else [],
+    }
 
 
 def snapshot(model):
@@ -188,17 +212,18 @@ def run(args, report):
     import numpy as np
     import torch
     import detectron2
-    from detectron2.modeling.meta_arch.ctcmt_mtl import CTCMT_MTL
     from detectron2.solver import build_optimizer
     from detectron2.data import detection_utils as utils, transforms as T
     from ctcmt.d2 import setup_cfg, build_triplet
     from ctcmt.ctta import CTCMTAdaptStep, CTCMTHyperParams
 
-    reference_path = Path(inspect.getsourcefile(CTCMT_MTL))
-    reference_hash = hashlib.sha256(reference_path.read_bytes()).hexdigest()
-    report["reference"] = {"file": str(reference_path), "sha256": reference_hash}
-    if reference_hash != REFERENCE_SHA256:
-        raise RuntimeError("Installed reference differs from uploaded/reviewed source; send this report before continuing")
+    if args.comparison == "reference-clean":
+        from detectron2.modeling.meta_arch.ctcmt_mtl import CTCMT_MTL
+        reference_path = Path(inspect.getsourcefile(CTCMT_MTL))
+        reference_hash = hashlib.sha256(reference_path.read_bytes()).hexdigest()
+        report["reference"] = {"file": str(reference_path), "sha256": reference_hash}
+        if reference_hash != REFERENCE_SHA256:
+            raise RuntimeError("Installed reference differs from uploaded/reviewed source; send this report before continuing")
     report["environment"] = {"python": sys.version, "torch": torch.__version__,
                              "detectron2": detectron2.__file__}
     for name, cls in (("clean_adapter", CTCMTAdaptStep),):
@@ -237,19 +262,35 @@ def run(args, report):
             return {n: getattr(obj, n) for n in ("student", "teacher", "anchor")}
         return {n: getattr(obj.triplet, n).model for n in ("student", "teacher", "anchor")}
 
+    if torch.are_deterministic_algorithms_enabled():
+        raise RuntimeError("Run without strict deterministic algorithms: ROIAlign fallback may exhaust memory")
+    labels = ("reference", "clean") if args.comparison == "reference-clean" else ("clean_first", "clean_second")
+    report["comparison"] = args.comparison
+    report["rng_mode"] = args.rng_mode
+    report["labels"] = list(labels)
+    report["environment"].update({"cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+                                  "pythonhashseed": os.environ.get("PYTHONHASHSEED"),
+                                  "gpu_names": [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]})
     report["steps"] = []
     coverage = {kind: {"optimizer_calls": 0, "changed_steps": 0, "losses": set()}
-                for kind in ("reference", "clean")}
+                for kind in labels}
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
-    if torch.cuda.is_available():
+    if torch.cuda.is_available() and args.comparison == "reference-clean":
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
+
+    report["backend"] = {"deterministic_algorithms": torch.are_deterministic_algorithms_enabled(),
+                         "cudnn_deterministic": torch.backends.cudnn.deterministic,
+                         "cudnn_benchmark": torch.backends.cudnn.benchmark,
+                         "matmul_tf32": torch.backends.cuda.matmul.allow_tf32,
+                         "cudnn_tf32": torch.backends.cudnn.allow_tf32}
 
     # A single triplet stays on GPU. Reference states are temporary CPU files.
     with tempfile.TemporaryDirectory(prefix="ctcmt-compare-") as tmp:
         tmp = Path(tmp)
-        for kind in ("reference", "clean"):
+        for pass_index, label in enumerate(labels):
+            kind = "reference" if label == "reference" else "clean"
             seed_all(args.seed)
             if kind == "reference":
                 obj = CTCMT_MTL(cfg)
@@ -262,10 +303,13 @@ def run(args, report):
                 call, code = obj.step, CTCMTAdaptStep.step.__code__
             models = models_of(obj, kind)
             initial = {n: snapshot(m) for n, m in models.items()}
-            if kind == "reference":
+            construction_rng = rng_fingerprint()
+            if pass_index == 0:
+                first_construction_rng = construction_rng
                 torch.save(initial, tmp / "initial.pt")
             else:
                 expected = torch.load(tmp / "initial.pt", map_location="cpu", weights_only=False)
+                report["construction_rng"] = compare(first_construction_rng, construction_rng, 0, 0)
                 report["initial"] = compare(expected, initial, 0.0, 0.0)
                 del expected
                 if not report["initial"]["passed"]:
@@ -273,23 +317,31 @@ def run(args, report):
                     return 1
             del initial
             for i, path in enumerate(images):
-                print(f"{kind}: step {i+1}/{len(images)}", flush=True)
+                print(f"{label}: step {i+1}/{len(images)}", flush=True)
                 before = {n: p.detach().cpu().clone() for n, p in models["student"].named_parameters()
                           if p.requires_grad}
-                seed_all(args.seed + 1000 + i)
+                if args.rng_mode == "per-image":
+                    seed_all(args.seed + 1000 + i)
+                rng_before_input = rng_fingerprint()
                 batch = batch_for(path)
+                rng_before_step = rng_fingerprint()
+                input_hash = hashlib.sha256(batch[0]["image"].numpy().tobytes()).hexdigest()
                 real_step = obj.optimizer.step
                 with patch.object(obj.optimizer, "step", wraps=real_step) as step_spy:
                     trace = capture_call(call, obj, code, batch, kind)
                     calls = step_spy.call_count
+                trace["rng_before_input"] = rng_before_input
+                trace["rng_before_step"] = rng_before_step
+                trace["rng_after_step"] = rng_fingerprint()
+                trace["input_sha256"] = input_hash
                 del real_step, step_spy, batch
                 states = {n: snapshot(m) for n, m in models.items()}
                 updates = {n: states["student"][n] - p for n, p in before.items()}
                 changed = any(bool(torch.count_nonzero(v)) for v in updates.values())
                 del before
-                coverage[kind]["optimizer_calls"] += calls
-                coverage[kind]["changed_steps"] += int(changed)
-                coverage[kind]["losses"].update(trace["losses"])
+                coverage[label]["optimizer_calls"] += calls
+                coverage[label]["changed_steps"] += int(changed)
+                coverage[label]["losses"].update(trace["losses"])
                 trace["thresholds"] = list(obj.thresholds if kind == "reference" else obj.threshold_filter.thresholds)
                 trace["score_ema"] = float(obj.score_em if kind == "reference" else obj.gate.score_em)
                 trace["optimizer_calls"] = calls
@@ -306,7 +358,7 @@ def run(args, report):
                         return type(x)(cpu_tree(v) for v in x)
                     return x
                 trace["optimizer"] = cpu_tree(obj.optimizer.state_dict())
-                if kind == "reference":
+                if pass_index == 0:
                     torch.save(trace, tmp / f"step-{i}.pt")
                 else:
                     expected = torch.load(tmp / f"step-{i}.pt", map_location="cpu", weights_only=False)
@@ -325,12 +377,22 @@ def run(args, report):
                         comparisons["optimizer_info"] = compare(
                             expected["optimizer"], trace["optimizer"], args.atol, args.rtol
                         )
+                    # Same builder/order in clean-clean: optimizer state is part of verdict.
+                    if args.comparison == "clean-clean":
+                        comparisons["optimizer"] = comparisons["optimizer_info"]
                     summary = {"step": i+1, "image": str(path), "comparisons": comparisons,
-                               "reference_losses": {k: report_scalar(v) for k, v in expected["losses"].items()},
-                               "clean_losses": {k: report_scalar(v) for k, v in trace["losses"].items()},
-                               "reference_gate": expected["gate"], "clean_gate": trace["gate"],
-                               "reference_boxes": len(expected["pseudo"]["scores"]),
-                               "clean_boxes": len(trace["pseudo"]["scores"])}
+                               "first_losses": {k: report_scalar(v) for k, v in expected["losses"].items()},
+                               "second_losses": {k: report_scalar(v) for k, v in trace["losses"].items()},
+                               "first_gate": expected["gate"], "second_gate": trace["gate"],
+                               "first_boxes": len(expected["pseudo"]["scores"]),
+                               "second_boxes": len(trace["pseudo"]["scores"])}
+                    summary["rng"] = {"first": {k: v for k, v in expected.items() if k.startswith("rng_")},
+                                      "second": {k: v for k, v in trace.items() if k.startswith("rng_")}}
+                    summary["input_sha256"] = {"first": expected["input_sha256"], "second": trace["input_sha256"]}
+                    if args.comparison == "reference-clean":
+                        for field in ("losses", "gate", "boxes"):
+                            summary["reference_" + field] = summary["first_" + field]
+                            summary["clean_" + field] = summary["second_" + field]
                     report["steps"].append(summary)
                     failed = [k for k, v in comparisons.items()
                               if k != "optimizer_info" and not v["passed"]]
@@ -360,6 +422,8 @@ def run(args, report):
                               (hp.weight_ctcr > 0, "ctcr")):
             if enabled and name not in data["losses"]:
                 missing.append(f"{kind}: {name} not exercised")
+    report["first_mismatch_step"] = next((s["step"] for s in report["steps"]
+        if any(not c["passed"] for name, c in s["comparisons"].items() if name != "optimizer_info")), None)
     report["coverage_gaps"] = missing
     report["status"] = "MISMATCH" if mismatched else ("INCOMPLETE_COVERAGE" if missing else "MATCH_TESTED_SEQUENCE")
     return 1 if mismatched else (2 if missing else 0)
